@@ -17,7 +17,7 @@ python3 -c "import openvino as ov; print(ov.Core().available_devices)"   # expec
 ## 1. Get the project
 ```bash
 sudo mkdir -p /opt/fetch42 && sudo chown $USER:$USER /opt/fetch42
-git clone https://github.com/ecradtke/fetch42-ubuntu /opt/fetch42
+git clone https://github.com/ecradtke/ubuntuport /opt/fetch42
 cd /opt/fetch42
 ```
 A private repo asks for a username and a **personal access token** (fine-grained, `Contents: Read-only`) as the password.
@@ -49,7 +49,7 @@ distribution", set `OPENVINO_PYTHON` to the interpreter where OpenVINO already w
 
 ## 3. Get a chat model (GGUF) and start llama.cpp
 ```bash
-./scripts/download-model.sh <hf-repo> <file.gguf> --switch
+./scripts/download-model.sh REPO FILE.gguf --switch      # replace REPO and FILE with real names
 ```
 Examples (check the exact repo and file names on huggingface.co; these are the usual ones, not verified here):
 ```bash

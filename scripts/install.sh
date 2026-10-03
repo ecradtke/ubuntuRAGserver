@@ -163,7 +163,7 @@ done
 echo
 ok "Install finished. Next steps:"
 echo "  - Status:        ./scripts/k13ctl.sh status"
-$HAVE_MODEL || echo "  - Get a model:   ./scripts/download-model.sh <hf-repo> <file.gguf> --switch    (then the chat LLM starts)"
+$HAVE_MODEL || echo "  - Get a model:   ./scripts/download-model.sh REPO FILE.gguf --switch    (then the chat LLM starts)"
 echo "  - Web portal:    http://$(hostname -I | awk '{print $1}'):$(env_get WEB_PORT 8501)"
 echo "  - Backups:       ./scripts/install-cron.sh"
 echo "  (Log out and back in once so your shell picks up the render/video groups.)"

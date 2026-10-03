@@ -24,11 +24,13 @@ Why llama.cpp for chat: GGUF models can be split between GPU and CPU (`LLAMA_GPU
 ## Quick start
 
 ```bash
-git clone https://github.com/ecradtke/fetch42-ubuntu /opt/fetch42 && cd /opt/fetch42
+sudo mkdir -p /opt/fetch42 && sudo chown $USER:$USER /opt/fetch42
+git clone https://github.com/ecradtke/ubuntuport /opt/fetch42 && cd /opt/fetch42
 ./scripts/install.sh          # first run creates .env and stops: edit it, then run again
 nano .env
 ./scripts/install.sh
-./scripts/download-model.sh <hf-repo> <file.gguf> --switch     # get a chat model and start llama-server
+# get a chat model: replace REPO and FILE with real names from huggingface.co (see docs/install_ubuntu.md)
+./scripts/download-model.sh REPO FILE.gguf --switch
 ./scripts/k13ctl.sh status
 ./scripts/install-cron.sh     # nightly backups at 04:00 / 04:15
 ```
