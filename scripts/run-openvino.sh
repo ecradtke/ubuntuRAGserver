@@ -9,7 +9,7 @@ SETUP="$(env_get OPENVINO_SETUPVARS)"
 if [[ -n "$SETUP" ]]; then [[ -f "$SETUP" ]] || die "OPENVINO_SETUPVARS not found: $SETUP"; set +u; source "$SETUP"; set -u; fi
 
 export DEFAULT_MODEL="$(env_get DEFAULT_MODEL OpenVINO/Qwen3-8B-int4-ov)"
-export EMBED_MODEL="$(env_get EMBED_MODEL BAAI/bge-small-en-v1.5)"
+export EMBED_MODEL="$(env_get EMBED_MODEL BAAI/bge-base-en-v1.5)"
 export LLM_DEVICE="$(env_get LLM_DEVICE GPU)" EMBED_DEVICE="$(env_get EMBED_DEVICE NPU)"
 export LLM_THINKING="$(env_get LLM_THINKING off)" MAX_NEW_TOKENS="$(env_get MAX_NEW_TOKENS 2048)"
 export SWITCH_ALLOW_CPU="$(env_get SWITCH_ALLOW_CPU off)"

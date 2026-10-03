@@ -2,20 +2,21 @@
 # ==============================================================================
 # K13 AI Stack - installer for Ubuntu Server (native services, no containers)
 #
-# Usage: ./scripts/install.sh [--units-only] [--upgrade-qdrant] [--skip-qdrant]
+# Usage: ./scripts/install.sh [--units-only] [--upgrade-qdrant] [--skip-qdrant] [--keep-embed-model]
 #   (no flags)        full install: packages, folders, Python envs, Qdrant, systemd units, start services
 #   --units-only      only (re)install the systemd units
 #   --upgrade-qdrant  download the latest Qdrant even if one is installed
 #   --skip-qdrant     do not install Qdrant (you provide your own on port 6333)
+#   --keep-embed-model  do not reset EMBED_MODEL in .env to BGE Base (BAAI/bge-base-en-v1.5)
 # Safe to run repeatedly. Run as your normal user; it uses sudo where needed.
 # ==============================================================================
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
-UNITS_ONLY=false; UPGRADE_QDRANT=false; SKIP_QDRANT=false
+UNITS_ONLY=false; UPGRADE_QDRANT=false; SKIP_QDRANT=false; KEEP_EMBED=false
 for a in "$@"; do
   case "$a" in
-    --units-only) UNITS_ONLY=true ;; --upgrade-qdrant) UPGRADE_QDRANT=true ;; --skip-qdrant) SKIP_QDRANT=true ;;
+    --units-only) UNITS_ONLY=true ;; --upgrade-qdrant) UPGRADE_QDRANT=true ;; --skip-qdrant) SKIP_QDRANT=true ;; --keep-embed-model) KEEP_EMBED=true ;;
     -h|--help) sed -n 2,11p "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown option: $a" ;;
   esac
@@ -35,6 +36,18 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 0
 fi
 chmod 600 "$ENV_FILE"
+# The embedding model defaults to BGE Base (768 dims) on every install; --keep-embed-model opts out.
+if ! $KEEP_EMBED && ! $UNITS_ONLY; then
+  cur="$(env_get EMBED_MODEL)"
+  if [[ "$cur" != "BAAI/bge-base-en-v1.5" ]]; then
+    if grep -qE '^[[:space:]]*EMBED_MODEL=' "$ENV_FILE"; then
+      sed -i -E 's#^[[:space:]]*EMBED_MODEL=.*#EMBED_MODEL=BAAI/bge-base-en-v1.5#' "$ENV_FILE"
+    else
+      printf '\nEMBED_MODEL=BAAI/bge-base-en-v1.5\n' >> "$ENV_FILE"
+    fi
+    ok "EMBED_MODEL set to BAAI/bge-base-en-v1.5 in .env (was: ${cur:-unset}). The RSS sync re-indexes Qdrant if the vector size changed."
+  fi
+fi
 load_k13_env
 STORAGE="$(env_get QDRANT_STORAGE_DIR "$K13_DATA_DIR/qdrant/storage")"
 SNAPSHOTS="$(env_get QDRANT_SNAPSHOTS_DIR "$K13_DATA_DIR/qdrant/snapshots")"

@@ -20,7 +20,7 @@ PG_USER = os.getenv("PG_USER", "postgres")
 PG_PASS = os.getenv("PG_PASS", "postgres_password")
 
 EMBEDDING_HOST = os.getenv("EMBEDDING_HOST", os.getenv("OPENVINO_HOST", os.getenv("OLLAMA_HOST", "http://k13-openvino:11434")))
-EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-small-en-v1.5")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-base-en-v1.5")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "k13-qdrant")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION = "rss_articles"
@@ -212,8 +212,8 @@ def drain_unvectorized_to_qdrant(session, pg_conn, q_client):
         active_dim = len(sample_emb)
         print(f"[Qdrant] Detected active embedding dimension from inference server: {active_dim} dims.")
     except Exception as e:
-        print(f"[Qdrant] Warning: Could not probe embedding dimension ({e}). Defaulting to 384.")
-        active_dim = 384
+        print(f"[Qdrant] Warning: Could not probe embedding dimension ({e}). Defaulting to 768.")
+        active_dim = 768
 
     # 2. Reconcile Qdrant collection schema
     if not q_client.collection_exists(QDRANT_COLLECTION):

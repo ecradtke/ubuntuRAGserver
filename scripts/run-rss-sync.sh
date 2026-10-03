@@ -9,7 +9,7 @@ for k in FRESHRSS_BASE_URL FRESHRSS_USER FRESHRSS_API_PASS PG_HOST PG_PORT PG_DB
   export "$k=$(env_get "$k")"
 done
 export EMBEDDING_HOST="http://127.0.0.1:${OV_PORT}" OLLAMA_HOST="http://127.0.0.1:${OV_PORT}"
-export EMBED_MODEL=bge-small-en-v1.5
+export EMBED_MODEL=bge-base-en-v1.5
 export QDRANT_HOST=127.0.0.1 QDRANT_PORT="$QDRANT_PORT"
 export PYTHONUNBUFFERED=1
 exec "$PY" "$BASE_DIR/rss/sync_freshrss.py"

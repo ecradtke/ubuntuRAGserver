@@ -34,7 +34,7 @@ Set at least:
 |---|---|
 | `OPENVINO_PYTHON` / `OPENVINO_SETUPVARS` | only if OpenVINO is not in this project's own venv (blank = the installer creates `.venv-openvino`) |
 | `DEFAULT_MODEL` | OpenVINO LLM repo on Hugging Face (default `OpenVINO/Qwen3-8B-int4-ov`) |
-| `EMBED_MODEL` | `BAAI/bge-small-en-v1.5` (384 dims) or `BAAI/bge-base-en-v1.5` (768). Pick once: it must match your Qdrant collection |
+| `EMBED_MODEL` | `BAAI/bge-base-en-v1.5` (768 dims) is the default and `install.sh` resets it on every run (`--keep-embed-model` to opt out). If the dimension changes, the RSS sync recreates the Qdrant collection and re-embeds everything from Postgres automatically |
 | `FRESHRSS_*`, `PG_*` | your NAS FreshRSS and PostgreSQL logins |
 | `HF_TOKEN` | Hugging Face token (model downloads) |
 | `DROPIT_DIR` | backup folder (default `/srv/dropit`) |

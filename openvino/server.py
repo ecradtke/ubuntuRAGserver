@@ -34,7 +34,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 INFERENCE_DEVICE = os.getenv("LLM_DEVICE") or os.getenv("INFERENCE_DEVICE", "GPU")
 EMBED_DEVICE = os.getenv("EMBED_DEVICE", "NPU")
 DEFAULT_LLM_REPO = os.getenv("DEFAULT_MODEL") or os.getenv("DEFAULT_MODEL_REPO", "OpenVINO/Phi-3.5-mini-instruct-int4-ov")
-DEFAULT_EMBED_REPO = os.getenv("EMBED_MODEL") or os.getenv("DEFAULT_EMBED_REPO", "BAAI/bge-small-en-v1.5")
+DEFAULT_EMBED_REPO = os.getenv("EMBED_MODEL") or os.getenv("DEFAULT_EMBED_REPO", "BAAI/bge-base-en-v1.5")
 # Reasoning models (Qwen3, ...) burn their token budget on hidden <think> reasoning and can run out
 # before writing an answer. Thinking is OFF by default; set LLM_THINKING=on to allow it.
 # A model switch that only fits on the CPU is treated as a failure (and rolled back) unless this is on.

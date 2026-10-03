@@ -437,14 +437,14 @@ if switch_target == CUSTOM_MODEL_KEY:
     ).strip()
 
 # Fetch live EMBED switch state from inference server
-_current_embed_model = "BAAI/bge-small-en-v1.5"
+_current_embed_model = "BAAI/bge-base-en-v1.5"
 _embed_switch_state = "idle"
 _embed_switch_error = None
 try:
     _em_resp = requests.get(f"{ollama_api.rstrip('/')}/api/switch-embed-model/status", timeout=3)
     if _em_resp.status_code == 200:
         _em_json = _em_resp.json()
-        _current_embed_model = _em_json.get("current_model", "BAAI/bge-small-en-v1.5")
+        _current_embed_model = _em_json.get("current_model", "BAAI/bge-base-en-v1.5")
         _embed_switch_state = _em_json.get("switch_status", {}).get("state", "idle")
         _embed_switch_error = _em_json.get("switch_status", {}).get("error")
 except Exception:
@@ -498,8 +498,8 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔬 Switch Embedding Model")
 
 CURATED_EMBED_MODELS = {
-    "BAAI/bge-small-en-v1.5": "BGE Small  •  384 dims  •  ~90 MB  (default, NPU)",
-    "BAAI/bge-base-en-v1.5":  "BGE Base ⭐  •  768 dims  •  ~430 MB  (better quality)",
+    "BAAI/bge-base-en-v1.5":  "BGE Base ⭐  •  768 dims  •  ~430 MB  (default, NPU)",
+    "BAAI/bge-small-en-v1.5": "BGE Small  •  384 dims  •  ~90 MB  (faster, lower quality)",
 }
 
 _embed_keys = list(CURATED_EMBED_MODELS.keys())
