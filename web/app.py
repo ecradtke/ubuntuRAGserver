@@ -431,7 +431,7 @@ if _names:
             st.sidebar.error("llama-server did not come up with that model. It may be too large for the GPU; check: ./scripts/k13ctl.sh logs llama")
 else:
     st.sidebar.info(f"No .gguf models in {MODELS_DIR}. Download one on the server:\n\n"
-                    "`./scripts/download-model.sh <hf-repo> <file.gguf> --switch`")
+                    "`./scripts/download-model.sh --preset qwen3-8b --switch`")
 
 # Fetch live EMBED switch state from inference server
 _current_embed_model = "BAAI/bge-small-en-v1.5"
