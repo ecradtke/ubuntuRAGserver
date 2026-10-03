@@ -19,12 +19,10 @@ env_get() {                 # env_get KEY [default]  -> value from the real envi
 # Load the variables the run-* wrappers need, with defaults, into the environment
 load_k13_env() {
   K13_DATA_DIR="$(env_get K13_DATA_DIR /var/lib/k13)"
-  MODELS_DIR="$(env_get MODELS_DIR "$K13_DATA_DIR/models")"
   OV_MODELS_DIR="$(env_get OV_MODELS_DIR "$K13_DATA_DIR/openvino")"
-  EMBED_HOST="$(env_get EMBED_HOST 127.0.0.1)"; EMBED_PORT="$(env_get EMBED_PORT 11434)"
-  LLAMA_HOST="$(env_get LLAMA_HOST 127.0.0.1)"; LLAMA_PORT="$(env_get LLAMA_PORT 8080)"
+  OV_HOST="$(env_get OV_HOST 127.0.0.1)"; OV_PORT="$(env_get OV_PORT 11434)"
   QDRANT_PORT="$(env_get QDRANT_PORT 6333)"
-  export K13_DATA_DIR MODELS_DIR OV_MODELS_DIR EMBED_HOST EMBED_PORT LLAMA_HOST LLAMA_PORT QDRANT_PORT
+  export K13_DATA_DIR OV_MODELS_DIR OV_HOST OV_PORT QDRANT_PORT
 }
 
 log()  { printf '[*] %s\n' "$*"; }

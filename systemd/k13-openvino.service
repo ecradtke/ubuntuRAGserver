@@ -1,5 +1,5 @@
 [Unit]
-Description=K13 OpenVINO embedding server (Intel NPU)
+Description=K13 OpenVINO server (LLM on Intel GPU, embeddings on Intel NPU)
 After=network-online.target
 Wants=network-online.target
 
@@ -9,9 +9,11 @@ User=@USER@
 # /dev/accel/accel0 (NPU) and /dev/dri (GPU) belong to these groups
 SupplementaryGroups=render video
 WorkingDirectory=@REPO@
-ExecStart=@REPO@/scripts/run-embed.sh
+ExecStart=@REPO@/scripts/run-openvino.sh
 Restart=on-failure
 RestartSec=10
+# first start downloads and compiles models
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=multi-user.target

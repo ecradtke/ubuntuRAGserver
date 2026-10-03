@@ -1,5 +1,6 @@
 streamlit>=1.47
 qdrant-client
+ollama
 requests
 python-dotenv
 tzdata

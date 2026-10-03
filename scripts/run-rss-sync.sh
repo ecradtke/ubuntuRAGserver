@@ -8,7 +8,7 @@ PY="$BASE_DIR/.venv/bin/python"
 for k in FRESHRSS_BASE_URL FRESHRSS_USER FRESHRSS_API_PASS PG_HOST PG_PORT PG_DB PG_USER PG_PASS; do
   export "$k=$(env_get "$k")"
 done
-export EMBEDDING_HOST="http://${EMBED_HOST}:${EMBED_PORT}" OLLAMA_HOST="http://${EMBED_HOST}:${EMBED_PORT}"
+export EMBEDDING_HOST="http://127.0.0.1:${OV_PORT}" OLLAMA_HOST="http://127.0.0.1:${OV_PORT}"
 export EMBED_MODEL=bge-small-en-v1.5
 export QDRANT_HOST=127.0.0.1 QDRANT_PORT="$QDRANT_PORT"
 export PYTHONUNBUFFERED=1

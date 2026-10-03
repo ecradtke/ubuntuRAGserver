@@ -4,7 +4,7 @@
 #
 # Usage: ./scripts/install.sh [--units-only] [--upgrade-qdrant] [--skip-qdrant]
 #   (no flags)        full install: packages, folders, Python envs, Qdrant, systemd units, start services
-#   --units-only      only (re)install the systemd units and the model-switch helper
+#   --units-only      only (re)install the systemd units
 #   --upgrade-qdrant  download the latest Qdrant even if one is installed
 #   --skip-qdrant     do not install Qdrant (you provide your own on port 6333)
 # Safe to run repeatedly. Run as your normal user; it uses sudo where needed.
@@ -29,7 +29,7 @@ USER_NAME="$(id -un)"
 if [[ ! -f "$ENV_FILE" ]]; then
   cp "$BASE_DIR/.env.example" "$ENV_FILE"; chmod 600 "$ENV_FILE"
   ok "Created $ENV_FILE from .env.example"
-  echo "    Edit it now (nano $ENV_FILE): FreshRSS + PostgreSQL logins, llama-server path, HF_TOKEN."
+  echo "    Edit it now (nano $ENV_FILE): FreshRSS + PostgreSQL logins, HF_TOKEN, and OPENVINO_PYTHON if your OpenVINO lives elsewhere."
   echo "    Then run ./scripts/install.sh again."
   exit 0
 fi
@@ -41,20 +41,17 @@ grep -qE '^(FRESHRSS_USER|PG_PASS|FRESHRSS_API_PASS)=.*your_' "$ENV_FILE" && \
   warn ".env still has placeholder FreshRSS/PostgreSQL values: the RSS sync will fail until you set them."
 
 install_units() {
-  log "Installing systemd units and the model-switch helper..."
-  local f name tmp
+  log "Installing systemd units..."
+  local f name
   for f in "$BASE_DIR"/systemd/*; do
     name="$(basename "$f")"
     sed -e "s#@USER@#${USER_NAME}#g" -e "s#@REPO@#${BASE_DIR}#g" "$f" | sudo tee "/etc/systemd/system/$name" >/dev/null
   done
-  tmp="$(mktemp)"
-  sed -e "s#@DATA_DIR@#${K13_DATA_DIR}#g" -e "s#@MODELS_DIR@#${MODELS_DIR}#g" "$BASE_DIR/scripts/llm-switch.sh" > "$tmp"
-  sudo install -m 755 -o root -g root "$tmp" /usr/local/sbin/k13-llm-switch; rm -f "$tmp"
-  echo "${USER_NAME} ALL=(root) NOPASSWD: /usr/local/sbin/k13-llm-switch" | sudo tee /etc/sudoers.d/k13-llm-switch >/dev/null
-  sudo chmod 440 /etc/sudoers.d/k13-llm-switch
-  if ! sudo visudo -cf /etc/sudoers.d/k13-llm-switch >/dev/null; then
-    sudo rm -f /etc/sudoers.d/k13-llm-switch; die "sudoers rule was invalid and has been removed."
-  fi
+  # clean up units/helpers from the earlier llama.cpp-based layout, if they were ever installed
+  for old in k13-llama.service k13-embed.service; do
+    if [[ -f "/etc/systemd/system/$old" ]]; then sudo systemctl disable --now "$old" 2>/dev/null || true; sudo rm -f "/etc/systemd/system/$old"; fi
+  done
+  sudo rm -f /etc/sudoers.d/k13-llm-switch /usr/local/sbin/k13-llm-switch
   sudo systemctl daemon-reload
   ok "Units installed."
 }
@@ -73,10 +70,10 @@ sudo usermod -aG render,video "$USER_NAME" || true     # NPU/GPU device access f
 
 # ---- 3. Folders ---------------------------------------------------------------------
 log "Creating folders..."
-for d in "$MODELS_DIR" "$OV_MODELS_DIR" "$STORAGE" "$SNAPSHOTS" "$K13_DATA_DIR" /opt/k13/qdrant "$BASE_DIR/logs"; do
+for d in "$OV_MODELS_DIR" "$STORAGE" "$SNAPSHOTS" "$K13_DATA_DIR" /opt/k13/qdrant "$BASE_DIR/logs"; do
   sudo mkdir -p "$d"
 done
-sudo chown -R "$USER_NAME:$USER_NAME" "$K13_DATA_DIR" "$MODELS_DIR" "$OV_MODELS_DIR" "$STORAGE" "$SNAPSHOTS" /opt/k13 "$BASE_DIR/logs"
+sudo chown -R "$USER_NAME:$USER_NAME" "$K13_DATA_DIR" "$OV_MODELS_DIR" "$STORAGE" "$SNAPSHOTS" /opt/k13 "$BASE_DIR/logs"
 
 # ---- 4. Python environments -----------------------------------------------------------
 log "Creating the web/RSS Python environment (.venv)..."
@@ -98,17 +95,17 @@ else
     python3 -m venv --system-site-packages "$BASE_DIR/.venv-openvino"
   fi
   "$BASE_DIR/.venv-openvino/bin/pip" install -q --upgrade pip
-  "$BASE_DIR/.venv-openvino/bin/pip" install -q -r "$BASE_DIR/embed/requirements.txt" \
-    || warn "pip could not install every embedding package (no wheels for this Python?). Set OPENVINO_PYTHON in .env to the Python that already has OpenVINO, then rerun."
+  "$BASE_DIR/.venv-openvino/bin/pip" install -q -r "$BASE_DIR/openvino/requirements.txt" \
+    || warn "pip could not install every OpenVINO server package (no wheels for this Python?). Set OPENVINO_PYTHON in .env to the Python that already has OpenVINO, then rerun."
 fi
 missing="$("$OV_PY" - <<'PY' 2>/dev/null || true
-import importlib
-miss=[m for m in ("openvino","fastapi","uvicorn","transformers","numpy") if importlib.util.find_spec(m) is None]
+import importlib.util
+miss=[m for m in ("openvino","openvino_genai","fastapi","uvicorn","transformers","numpy","torch","huggingface_hub") if importlib.util.find_spec(m) is None]
 print(" ".join(miss))
 PY
 )"
-[[ -z "$missing" ]] && ok "OpenVINO Python has everything the embedding server needs." \
-  || warn "OpenVINO Python is missing: $missing  -> $OV_PY -m pip install -r $BASE_DIR/embed/requirements.txt"
+[[ -z "$missing" ]] && ok "OpenVINO Python has everything the server needs." \
+  || warn "OpenVINO Python is missing: $missing  -> $OV_PY -m pip install -r $BASE_DIR/openvino/requirements.txt"
 
 # ---- 5. Qdrant (native binary) ----------------------------------------------------------
 install_qdrant() {
@@ -139,34 +136,25 @@ if $SKIP_QDRANT; then log "Skipping Qdrant install."
 elif $UPGRADE_QDRANT || [[ ! -x /opt/k13/qdrant/qdrant ]]; then install_qdrant
 else ok "Qdrant already installed (use --upgrade-qdrant to update)."; fi
 
-# ---- 6. llama.cpp check --------------------------------------------------------------------
-LLAMA_BIN="$(env_get LLAMA_SERVER_BIN /usr/local/bin/llama-server)"
-if [[ ! -x "$LLAMA_BIN" ]] && ! command -v llama-server >/dev/null; then
-  warn "llama-server not found at $LLAMA_BIN. Set LLAMA_SERVER_BIN in .env (find it with: command -v llama-server)."
-fi
-
-# ---- 7. systemd ----------------------------------------------------------------------------------
+# ---- 6. systemd ----------------------------------------------------------------------------------
 install_units
-sudo systemctl enable k13-qdrant.service k13-embed.service k13-web.service k13-rss-sync.timer k13-llama.service >/dev/null 2>&1
-sudo systemctl restart k13-qdrant.service k13-embed.service
+sudo systemctl enable k13-qdrant.service k13-openvino.service k13-web.service k13-rss-sync.timer >/dev/null 2>&1
+sudo systemctl restart k13-qdrant.service k13-openvino.service
 sudo systemctl restart k13-web.service
 sudo systemctl start k13-rss-sync.timer
-HAVE_MODEL=false
-if [[ -s "$K13_DATA_DIR/active_model" ]] || [[ -n "$(env_get LLAMA_MODEL)" ]]; then HAVE_MODEL=true; fi
-if $HAVE_MODEL; then sudo systemctl restart k13-llama.service; fi
 
-# ---- 8. Verify ---------------------------------------------------------------------------------------
-log "Waiting for services (the embedding model can take a few minutes on its first start)..."
+# ---- 7. Verify ---------------------------------------------------------------------------------------
+log "Waiting for services (the first OpenVINO start downloads the models and can take 10+ minutes; this check only waits ~2 min)..."
 for i in $(seq 1 30); do
   q=$(curl -fs --max-time 3 "http://127.0.0.1:${QDRANT_PORT}/healthz" >/dev/null 2>&1 && echo up || echo down)
-  e=$(curl -fs --max-time 3 "http://${EMBED_HOST}:${EMBED_PORT}/healthz" >/dev/null 2>&1 && echo up || echo down)
-  [[ "$q" == up && "$e" == up ]] && break
-  echo "    qdrant: $q  embed: $e  ($i/30)"; sleep 4
+  o=$(curl -fs --max-time 3 "http://127.0.0.1:${OV_PORT}/healthz" >/dev/null 2>&1 && echo up || echo down)
+  [[ "$q" == up && "$o" == up ]] && break
+  echo "    qdrant: $q  openvino: $o  ($i/30)"; sleep 4
 done
 echo
 ok "Install finished. Next steps:"
 echo "  - Status:        ./scripts/k13ctl.sh status"
-$HAVE_MODEL || echo "  - Get a model:   ./scripts/download-model.sh REPO FILE.gguf --switch    (then the chat LLM starts)"
+echo "  - Watch models:  ./scripts/k13ctl.sh logs openvino   (first start downloads the LLM and embedding model)"
 echo "  - Web portal:    http://$(hostname -I | awk '{print $1}'):$(env_get WEB_PORT 8501)"
 echo "  - Backups:       ./scripts/install-cron.sh"
 echo "  (Log out and back in once so your shell picks up the render/video groups.)"

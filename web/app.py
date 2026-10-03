@@ -1,7 +1,5 @@
 import os
 import re
-import json
-import subprocess
 import streamlit as st
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny, Range, PayloadSchemaType
@@ -11,6 +9,7 @@ try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover
     ZoneInfo = None
+import ollama
 import requests
 
 try:
@@ -211,69 +210,67 @@ st.markdown("""
 # Environment Configuration & Defaults
 # ==============================================================================
 # Native services on this server (scripts/run-web.sh exports these URLs)
-LLAMA_URL_DEFAULT = os.getenv("LLAMA_URL", "http://127.0.0.1:8080")      # llama.cpp llama-server (chat)
-EMBED_URL_DEFAULT = os.getenv("EMBED_URL", "http://127.0.0.1:11434")      # OpenVINO embedding server (NPU)
+DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")   # OpenVINO server (LLM + embeddings)
 DEFAULT_QDRANT_HOST = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 DEFAULT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rss_articles")
-MODELS_DIR = os.getenv("MODELS_DIR", "/var/lib/k13/models")               # GGUF files
-LLM_SWITCH_BIN = os.getenv("LLM_SWITCH_BIN", "/usr/local/sbin/k13-llm-switch")
-LLM_THINKING_ON = os.getenv("LLM_THINKING", "off").strip().lower() in ("on", "1", "true", "yes")
-MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "2048"))
+DEFAULT_LLM_MODEL = os.getenv("DEFAULT_MODEL", "OpenVINO/Phi-3.5-mini-instruct-int4-ov")
 
 # ==============================================================================
 # Sidebar Configuration
 # ==============================================================================
 st.sidebar.markdown("### ⚙️ Cluster Endpoints")
 
-llama_url = st.sidebar.text_input(
-    "Chat LLM Server (llama.cpp)",
-    value=LLAMA_URL_DEFAULT,
-    help="llama-server's OpenAI-compatible API on this server"
+ollama_url = st.sidebar.text_input(
+    "Inference Server URL",
+    value=DEFAULT_OLLAMA_HOST,
+    help="URL of the OpenVINO NPU / Ollama-compatible server on this server"
 )
-embed_url = st.sidebar.text_input(
-    "Embedding Server (OpenVINO)",
-    value=EMBED_URL_DEFAULT,
-    help="OpenVINO embedding server (Intel NPU) on this server"
-)
-llama_api = llama_url.strip().rstrip("/")
-embed_api = embed_url.strip().rstrip("/")
 
-# Chat LLM telemetry
-llm_connected = False
-llm_model_name = ""
-llm_ctx = None
-try:
-    _m = requests.get(f"{llama_api}/v1/models", timeout=3)
-    if _m.status_code == 200:
-        _data = _m.json().get("data", [])
-        if _data:
-            llm_model_name = _data[0].get("id", "")
-            llm_connected = True
-    _p = requests.get(f"{llama_api}/props", timeout=3)
-    if _p.status_code == 200:
-        llm_ctx = (_p.json().get("default_generation_settings") or {}).get("n_ctx")
-except Exception:
-    pass
-
-# Embedding telemetry
-embed_connected = False
+# Connect to Inference Engine & Query OpenVINO Telemetry
+ollama_api = ollama_url.strip().rstrip('/')
+ollama_client = ollama.Client(host=ollama_api)
+ollama_connected = False
+available_models = []
+engine_hardware_info = "Intel OpenVINO NPU"
+is_openvino = False
+llm_hw = "GPU"
 embed_hw = "NPU"
-_current_embed_model = "BAAI/bge-small-en-v1.5"
+
 try:
-    _h = requests.get(f"{embed_api}/healthz", timeout=3)
-    if _h.status_code == 200:
-        _hj = _h.json()
-        embed_connected = bool(_hj.get("embed_loaded", False))
-        embed_hw = _hj.get("embed_hardware", "NPU")
-        _current_embed_model = _hj.get("embed_model", _current_embed_model)
+    h_resp = requests.get(f"{ollama_api.rstrip('/')}/healthz", timeout=3)
+    if h_resp.status_code == 200:
+        is_openvino = True
+        h_json = h_resp.json()
+        llm_hw = h_json.get("llm_hardware", "GPU")
+        embed_hw = h_json.get("embed_hardware", "NPU")
+        engine_hardware_info = f"OpenVINO ({llm_hw} • {embed_hw})"
 except Exception:
     pass
 
-ollama_connected = llm_connected          # header status uses this name
-is_openvino = embed_connected
-engine_hardware_info = f"llama.cpp ✓ • OpenVINO {embed_hw} {'✓' if embed_connected else '✗'}"
-if embed_connected and embed_hw == "CPU":
-    st.sidebar.warning("⚠️ Embeddings are running on the CPU (the NPU was not available).")
+try:
+    models_resp = ollama_client.list()
+    models_list = models_resp.get("models", []) if isinstance(models_resp, dict) else getattr(models_resp, "models", [])
+    available_models = [
+        m.get("name", m.get("model", "")) if isinstance(m, dict) else getattr(m, "model", getattr(m, "name", "")) 
+        for m in models_list
+    ]
+    available_models = [m for m in available_models if m]
+    if available_models:
+        ollama_connected = True
+    else:
+        available_models = ["OpenVINO-Phi-3.5-mini-instruct-int4-ov", "OpenVINO-Llama-3.2-3B-NPU", "llama3.2:latest"]
+except Exception:
+    available_models = ["OpenVINO-Phi-3.5-mini-instruct-int4-ov", "OpenVINO-Llama-3.2-3B-NPU", "llama3.2:latest"]
+
+if is_openvino and llm_hw == "CPU":
+    st.sidebar.warning("⚠️ LLM is currently running on CPU fallback.")
+    if st.sidebar.button("⚡ Force Reload on GPU", use_container_width=True, key="btn_reload_gpu"):
+        try:
+            requests.post(f"{ollama_api.rstrip('/')}/api/reload", timeout=15)
+            time.sleep(1)
+            st.rerun()
+        except Exception as _re:
+            st.sidebar.error(f"Reload error: {_re}")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🗄️ Vector Database Engine")
@@ -375,70 +372,76 @@ top_k = st.sidebar.slider(
 )
 
 # ==============================================================================
-# Sidebar: Live LLM Model Switcher (GGUF files for llama.cpp)
+# Sidebar: Live LLM Model Switcher
 # ==============================================================================
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔄 Switch LLM Model")
 
-_local_models = []
+# Known pre-converted OpenVINO INT4 LLM models on Hugging Face Hub
+CURATED_OV_MODELS = {
+    "OpenVINO/Phi-3.5-mini-instruct-int4-ov":  "Phi-3.5 Mini  •  3.8B  •  ~2.2 GB  (default)",
+    "OpenVINO/Phi-4-mini-instruct-int4-ov":    "Phi-4 Mini ⭐  •  3.8B  •  ~2.5 GB  (recommended)",
+    "OpenVINO/Qwen3-4B-int4-ov":               "Qwen3 4B  •  4B  •  ~2.8 GB  (coding + reasoning)",
+    "OpenVINO/Llama-3.2-3B-Instruct-int4-ov": "Llama 3.2 3B  •  3B  •  ~2.0 GB  (Meta reliable)",
+    "OpenVINO/gemma-3-4B-it-int4-ov":          "Gemma 3 4B  •  4B  •  ~2.5 GB  (Google reasoning)",
+    "OpenVINO/Qwen3-8B-int4-ov":               "Qwen3 8B 🔥  •  8B  •  ~5.5 GB  (best quality, needs 6GB+)",
+    # 12-14B class: needs a lot of GPU-accessible memory. If a model does not fit on the GPU the switch is
+    # rolled back and the previous model stays loaded. Repo names are the usual OpenVINO Hub names; if one
+    # fails to download the sidebar shows the error and the current model stays loaded.
+    "OpenVINO/gemma-3-12b-it-int4-ov":         "Gemma 3 12B  •  12B  •  ~7.5 GB  (needs >8 GB GPU memory)",
+    "OpenVINO/Qwen3-14B-int4-ov":              "Qwen3 14B  •  14B  •  ~8.5 GB  (needs >9 GB GPU memory)",
+    "OpenVINO/Qwen2.5-14B-Instruct-int4-ov":   "Qwen2.5 14B Instruct  •  14B  •  ~8.5 GB  (needs >9 GB GPU memory)",
+    "OpenVINO/phi-4-int4-ov":                  "Phi-4 14B  •  14B  •  ~8.5 GB  (needs >9 GB GPU memory, 16k ctx)",
+}
+
+# Pseudo-entry that reveals a text box for any other Hugging Face repo
+CUSTOM_MODEL_KEY = "__custom__"
+CURATED_OV_MODELS[CUSTOM_MODEL_KEY] = "✏️ Custom Hugging Face repo…"
+
+# Fetch live switch state from the inference server
+_current_server_model = DEFAULT_LLM_MODEL
+_switch_state = "idle"
+_switch_error = None
 try:
-    for _e in sorted(os.scandir(MODELS_DIR), key=lambda e: e.name.lower()):
-        if _e.is_file() and _e.name.lower().endswith(".gguf"):
-            _local_models.append((_e.name, _e.stat().st_size))
+    _sw_resp = requests.get(f"{ollama_api.rstrip('/')}/api/switch-model/status", timeout=3)
+    if _sw_resp.status_code == 200:
+        _sw_json = _sw_resp.json()
+        _current_server_model = _sw_json.get("current_model", DEFAULT_LLM_MODEL)
+        _switch_state = _sw_json.get("switch_status", {}).get("state", "idle")
+        _switch_error = _sw_json.get("switch_status", {}).get("error")
 except Exception:
     pass
-_current_server_model = llm_model_name
-_sizes = dict(_local_models)
-_names = [n for n, _ in _local_models]
-_active_file = next((n for n in _names if n[:-5] == llm_model_name), None)
 
-if llm_connected:
-    st.sidebar.caption(f"🟢 Running: **{llm_model_name}**" + (f"  •  context {llm_ctx:,} tokens" if llm_ctx else ""))
+_current_label = CURATED_OV_MODELS.get(_current_server_model, _current_server_model.split("/")[-1])
+if _switch_state == "loading":
+    st.sidebar.caption("⏳ Switching model…")
 else:
-    st.sidebar.caption("🔴 llama-server is not responding (no model selected yet, or still loading).")
+    st.sidebar.caption(f"🟢 Running: **{_current_label}**")
 
-if _names:
-    switch_target = st.sidebar.selectbox(
-        "Target Model",
-        _names,
-        index=_names.index(_active_file) if _active_file in _names else 0,
-        format_func=lambda n: f"{n[:-5]}  •  {_sizes[n] / 1024**3:.1f} GB",
-        help=f"GGUF files found in {MODELS_DIR}. Switching restarts llama-server and takes up to a minute or two.",
-        key="model_switch_target",
-    )
-    if switch_target == _active_file and llm_connected:
-        st.sidebar.success("✅ Already active")
-    elif st.sidebar.button("🔄 Switch Model", use_container_width=True, key="btn_switch_model"):
-        with st.sidebar:
-            with st.spinner("Restarting llama-server with the new model…"):
-                _r = subprocess.run(["sudo", "-n", LLM_SWITCH_BIN, switch_target], capture_output=True, text=True, timeout=60)
-                _ok = False
-                if _r.returncode == 0:
-                    for _ in range(90):
-                        time.sleep(2)
-                        try:
-                            _chk = requests.get(f"{llama_api}/v1/models", timeout=3)
-                            if _chk.status_code == 200 and any(m.get("id") == switch_target[:-5] for m in _chk.json().get("data", [])):
-                                _ok = True
-                                break
-                        except Exception:
-                            pass
-        if _ok:
-            st.rerun()
-        elif _r.returncode != 0:
-            st.sidebar.error(f"Switch failed: {(_r.stderr or _r.stdout).strip()[:200]}")
-        else:
-            st.sidebar.error("llama-server did not come up with that model. It may be too large for the GPU; check: ./scripts/k13ctl.sh logs llama")
-else:
-    st.sidebar.info(f"No .gguf models in {MODELS_DIR}. Download one on the server:\n\n"
-                    "`./scripts/download-model.sh --preset qwen3-8b --switch`")
+_curated_keys = list(CURATED_OV_MODELS.keys())
+_default_idx = _curated_keys.index(_current_server_model) if _current_server_model in _curated_keys else 0
+switch_target = st.sidebar.selectbox(
+    "Target Model",
+    _curated_keys,
+    index=_default_idx,
+    format_func=lambda x: CURATED_OV_MODELS[x],
+    help="Select an OpenVINO INT4 model to load. First switch downloads the model (~2–9 GB; make sure you have free disk and RAM). The server returns 503 during the switch — inference resumes automatically when ready.",
+    key="model_switch_target"
+)
+if switch_target == CUSTOM_MODEL_KEY:
+    switch_target = st.sidebar.text_input(
+        "Hugging Face repo",
+        placeholder="OpenVINO/<model>-int4-ov",
+        help="Any OpenVINO-converted repo, e.g. one ending in -int4-ov.",
+        key="model_switch_custom",
+    ).strip()
 
 # Fetch live EMBED switch state from inference server
 _current_embed_model = "BAAI/bge-small-en-v1.5"
 _embed_switch_state = "idle"
 _embed_switch_error = None
 try:
-    _em_resp = requests.get(f"{embed_api}/api/switch-embed-model/status", timeout=3)
+    _em_resp = requests.get(f"{ollama_api.rstrip('/')}/api/switch-embed-model/status", timeout=3)
     if _em_resp.status_code == 200:
         _em_json = _em_resp.json()
         _current_embed_model = _em_json.get("current_model", "BAAI/bge-small-en-v1.5")
@@ -452,6 +455,41 @@ if _embed_switch_state == "loading":
     st.sidebar.caption("⏳ Switching embedding model…")
 else:
     st.sidebar.caption(f"🟢 Embed Running: **{_embed_current_label}**")
+
+if _switch_state == "loading":
+    st.sidebar.info("⏳ Loading model — server will return 503 until complete.")
+    if st.sidebar.button("↺ Check Status", use_container_width=True, key="btn_check_switch"):
+        st.rerun()
+elif _switch_state == "error":
+    st.sidebar.error(f"❌ Switch failed: {_switch_error}")
+    if st.sidebar.button("🔄 Retry Switch", use_container_width=True, key="btn_switch_model"):
+        try:
+            _r = requests.post(f"{ollama_api.rstrip('/')}/api/switch-model", json={"model": switch_target}, timeout=5)
+            if _r.status_code == 200:
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.sidebar.error(f"Server error {_r.status_code}: {_r.text[:120]}")
+        except Exception as _e:
+            st.sidebar.error(f"Connection error: {_e}")
+elif not switch_target:
+    st.sidebar.info("Enter a Hugging Face repo name above.")
+elif switch_target == _current_server_model:
+    st.sidebar.success("✅ Already active")
+else:
+    if st.sidebar.button("🔄 Switch Model", use_container_width=True, key="btn_switch_model"):
+        try:
+            _r = requests.post(f"{ollama_api.rstrip('/')}/api/switch-model", json={"model": switch_target}, timeout=5)
+            if _r.status_code == 200:
+                st.sidebar.success("🚀 Switch initiated!")
+                time.sleep(0.5)
+                st.rerun()
+            elif _r.status_code == 409:
+                st.sidebar.warning("⚠️ A switch is already in progress.")
+            else:
+                st.sidebar.error(f"Server error {_r.status_code}: {_r.text[:120]}")
+        except Exception as _e:
+            st.sidebar.error(f"Connection error: {_e}")
 
 # ==============================================================================
 # Sidebar: Embedding Model Switcher
@@ -483,7 +521,7 @@ elif _embed_switch_state == "error":
     st.sidebar.error(f"❌ Embed switch failed: {_embed_switch_error}")
     if st.sidebar.button("🔄 Retry Embed Switch", use_container_width=True, key="btn_retry_embed"):
         try:
-            _er = requests.post(f"{embed_api}/api/switch-embed-model", json={"model": embed_switch_target}, timeout=5)
+            _er = requests.post(f"{ollama_api.rstrip('/')}/api/switch-embed-model", json={"model": embed_switch_target}, timeout=5)
             if _er.status_code == 200:
                 time.sleep(0.5)
                 st.rerun()
@@ -498,7 +536,7 @@ else:
         st.sidebar.warning("⚠️ Dimension change detected — Qdrant collection must be re-indexed after switch.")
     if st.sidebar.button("🔬 Switch Embedding", use_container_width=True, key="btn_switch_embed"):
         try:
-            _er = requests.post(f"{embed_api}/api/switch-embed-model", json={"model": embed_switch_target}, timeout=5)
+            _er = requests.post(f"{ollama_api.rstrip('/')}/api/switch-embed-model", json={"model": embed_switch_target}, timeout=5)
             if _er.status_code == 200:
                 st.sidebar.success("🚀 Embedding switch initiated!")
                 time.sleep(0.5)
@@ -608,7 +646,7 @@ if st.sidebar.button("🗑️ Clear Chat History", use_container_width=True):
 st.markdown("""
 <div class="header-box">
     <h1 class="header-title">⚡ K13 AI Intelligence Hub</h1>
-    <p class="header-subtitle">llama.cpp (chat LLM) • Intel OpenVINO NPU (embeddings) & Neural Vector Search grounded on local Ubuntu services</p>
+    <p class="header-subtitle">Intel OpenVINO Acceleration (GPU: LLM • NPU: Embeddings) & Neural Vector Search grounded on local Ubuntu services</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -616,7 +654,7 @@ col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     status_class = "status-online" if ollama_connected else "status-offline"
-    card1_label = "Inference (llama.cpp + OpenVINO)"
+    card1_label = "Inference Engine (Intel)" if is_openvino else "Inference Engine"
     status_text = engine_hardware_info if ollama_connected else "Unreachable"
     st.markdown(f"""
     <div class="metric-card">
@@ -638,7 +676,7 @@ with col2:
     """, unsafe_allow_html=True)
 
 with col3:
-    display_model_name = llm_model_name or "No model loaded"
+    display_model_name = CURATED_OV_MODELS.get(_current_server_model, _current_server_model.split("/")[-1])
     st.markdown(f"""
     <div class="metric-card">
         <div class="metric-label">Active Model</div>
@@ -750,11 +788,13 @@ if active_query:
             # Determine vector embedding input
             embed_input = search_keywords if search_keywords.strip() else active_query
 
-            # Generate the query embedding on the OpenVINO NPU server
-            _er = requests.post(f"{embed_api}/api/embeddings",
-                                json={"model": _current_embed_model, "prompt": embed_input}, timeout=120)
-            _er.raise_for_status()
-            query_vector = _er.json()["embedding"]
+            # Generate embedding via Ollama
+            try:
+                emb_resp = ollama_client.embed(model=_current_embed_model, input=embed_input)
+                query_vector = emb_resp["embeddings"][0]
+            except AttributeError:
+                emb_resp = ollama_client.embeddings(model=_current_embed_model, prompt=embed_input)
+                query_vector = emb_resp["embedding"]
 
             if db_engine.startswith("Qdrant") and qdrant_connected and q_client is not None:
                 # Build Qdrant Filter
@@ -943,61 +983,40 @@ if active_query:
         else:
             augmented_user_prompt = active_query
 
-        # Stream the answer from llama.cpp (OpenAI-compatible SSE)
+        # Stream response from Ollama (without importing pandas)
         message_placeholder = st.empty()
         full_response = ""
         raw_response = ""
-        reasoning_seen = False
 
         try:
-            _payload = {
-                "model": llm_model_name or "local",
-                "messages": [
+            stream = ollama_client.chat(
+                model=_current_server_model,
+                messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": augmented_user_prompt},
+                    {"role": "user", "content": augmented_user_prompt}
                 ],
-                "stream": True,
-                "max_tokens": MAX_NEW_TOKENS,
-                "temperature": 0.3,
-                # Qwen3-style templates: answer directly instead of spending the budget on hidden reasoning
-                "chat_template_kwargs": {"enable_thinking": LLM_THINKING_ON},
-            }
-            with requests.post(f"{llama_api}/v1/chat/completions", json=_payload, stream=True, timeout=(5, 900)) as _resp:
-                _resp.raise_for_status()
-                for _line in _resp.iter_lines(decode_unicode=True):
-                    if not _line or not _line.startswith("data:"):
-                        continue
-                    _chunk = _line[5:].strip()
-                    if _chunk == "[DONE]":
-                        break
-                    try:
-                        _delta = json.loads(_chunk)["choices"][0].get("delta", {})
-                    except Exception:
-                        continue
-                    if _delta.get("reasoning_content"):
-                        reasoning_seen = True
-                    _token = _delta.get("content") or ""
-                    if not _token:
-                        if reasoning_seen and not raw_response:
-                            message_placeholder.markdown("💭 *Thinking…*")
-                        continue
-                    raw_response += _token
-                    full_response, thinking = strip_thinking(raw_response, streaming=True)
-                    if full_response:
-                        message_placeholder.markdown(full_response + "▌")
-                    else:
-                        message_placeholder.markdown("💭 *Thinking…*")
+                stream=True
+            )
+
+            for chunk in stream:
+                raw_response += chunk["message"]["content"]
+                full_response, thinking = strip_thinking(raw_response, streaming=True)
+                if full_response:
+                    message_placeholder.markdown(full_response + "▌")
+                elif thinking or raw_response:
+                    message_placeholder.markdown("💭 *Thinking…*")
 
             full_response, still_thinking = strip_thinking(raw_response)
             if not full_response:
-                if still_thinking or reasoning_seen:
+                if still_thinking:
                     full_response = ("⚠️ The model spent its entire response on internal reasoning and never wrote an answer. "
-                                     "Lower 'Excerpts to Retrieve (Top K)', ask a narrower question, or switch to a non-reasoning model.")
+                                     "Lower 'Excerpts to Retrieve (Top K)', ask a narrower question, or pick a non-reasoning model "
+                                     "(Phi-4 Mini, Llama 3.2 3B).")
                 else:
                     full_response = "⚠️ The model produced no answer. Try again or pick a different model."
             message_placeholder.markdown(full_response)
         except Exception as e:
-            full_response = f"⚠️ Generation error from llama.cpp: {e}"
+            full_response = f"⚠️ Generation error from OpenVINO: {e}"
             message_placeholder.error(full_response)
 
         # Save to session history

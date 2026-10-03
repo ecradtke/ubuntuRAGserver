@@ -1,6 +1,6 @@
 [Unit]
 Description=K13 FreshRSS -> Postgres -> Qdrant sync (one run)
-After=network-online.target k13-qdrant.service k13-embed.service
+After=network-online.target k13-qdrant.service k13-openvino.service
 Wants=network-online.target
 
 [Service]

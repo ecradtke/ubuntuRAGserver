@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Control the K13 services.
 #   k13ctl.sh status
-#   k13ctl.sh {start|stop|restart} {qdrant|embed|llama|web|rss|all}
-#   k13ctl.sh logs {qdrant|embed|llama|web|rss}
-#   k13ctl.sh models        list GGUF models (active one marked)
+#   k13ctl.sh {start|stop|restart} {qdrant|openvino|web|rss|all}
+#   k13ctl.sh logs {qdrant|openvino|web|rss}
 #   k13ctl.sh test          embedding + chat smoke tests
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
@@ -11,12 +10,12 @@ load_k13_env
 
 unit_of() {
   case "$1" in
-    qdrant) echo k13-qdrant.service ;; embed) echo k13-embed.service ;; llama) echo k13-llama.service ;;
+    qdrant) echo k13-qdrant.service ;; openvino) echo k13-openvino.service ;;
     web) echo k13-web.service ;; rss) echo k13-rss-sync.timer ;;
-    *) die "unknown service '$1' (qdrant|embed|llama|web|rss|all)" ;;
+    *) die "unknown service '$1' (qdrant|openvino|web|rss|all)" ;;
   esac
 }
-ALL=(qdrant embed llama web rss)
+ALL=(qdrant openvino web rss)
 
 case "${1:-status}" in
   status)
@@ -27,30 +26,25 @@ case "${1:-status}" in
     echo
     echo "--- health ---"
     printf 'qdrant : '; curl -fs --max-time 3 "http://127.0.0.1:${QDRANT_PORT}/healthz" || echo "not responding"; echo
-    printf 'embed  : '; curl -fs --max-time 20 "http://${EMBED_HOST}:${EMBED_PORT}/healthz" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"], "|", d.get("embed_hardware"), "|", d.get("embed_model"))' 2>/dev/null || echo "not responding"
-    printf 'llama  : '; curl -fs --max-time 5 "http://${LLAMA_HOST}:${LLAMA_PORT}/v1/models" | python3 -c 'import sys,json; print("ok |", ", ".join(m["id"] for m in json.load(sys.stdin)["data"]))' 2>/dev/null || echo "not responding (no model selected yet?)"
+    printf 'openvino: '; curl -fs --max-time 20 "http://127.0.0.1:${OV_PORT}/healthz" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["status"], "| LLM:", d.get("llm_hardware"), d.get("current_model"), "| embeddings:", d.get("embed_hardware"))' 2>/dev/null || echo "not responding (still loading models?)"
     ;;
   start|stop|restart)
-    act="$1"; target="${2:-}"; [[ -n "$target" ]] || die "usage: $0 $act {qdrant|embed|llama|web|rss|all}"
+    act="$1"; target="${2:-}"; [[ -n "$target" ]] || die "usage: $0 $act {qdrant|openvino|web|rss|all}"
     if [[ "$target" == all ]]; then for s in "${ALL[@]}"; do sudo systemctl "$act" "$(unit_of "$s")"; done
     else sudo systemctl "$act" "$(unit_of "$target")"; fi
     ;;
   logs)
-    [[ -n "${2:-}" ]] || die "usage: $0 logs {qdrant|embed|llama|web|rss}"
+    [[ -n "${2:-}" ]] || die "usage: $0 logs {qdrant|openvino|web|rss}"
     u="$(unit_of "$2")"; [[ "$2" == rss ]] && u=k13-rss-sync.service
     journalctl -fu "$u" -n 100
     ;;
-  models)
-    sudo -n /usr/local/sbin/k13-llm-switch --list 2>/dev/null || sudo /usr/local/sbin/k13-llm-switch --list
-    ;;
   test)
     log "Embedding test..."
-    curl -fs "http://${EMBED_HOST}:${EMBED_PORT}/api/embeddings" -d '{"prompt":"High-NA EUV lithography"}' \
+    curl -fs "http://127.0.0.1:${OV_PORT}/api/embeddings" -d '{"prompt":"High-NA EUV lithography"}' \
       | python3 -c 'import sys,json; v=json.load(sys.stdin)["embedding"]; print("  vector dimensions:", len(v))' || warn "embedding test failed"
     log "Chat test..."
-    curl -fs "http://${LLAMA_HOST}:${LLAMA_PORT}/v1/chat/completions" -H 'Content-Type: application/json' \
-      -d '{"messages":[{"role":"user","content":"Reply with the single word: ready"}],"max_tokens":16,"stream":false}' \
-      | python3 -c 'import sys,json; print("  ", json.load(sys.stdin)["choices"][0]["message"]["content"].strip())' || warn "chat test failed"
+    curl -fs "http://127.0.0.1:${OV_PORT}/api/generate" -d '{"prompt":"Reply with the single word: ready","stream":false}' \
+      | python3 -c 'import sys,json; print("  ", json.load(sys.stdin)["response"].strip()[:200])' || warn "chat test failed"
     ;;
   *) sed -n 2,8p "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

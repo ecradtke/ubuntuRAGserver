@@ -1,7 +1,7 @@
 [Unit]
 Description=K13 web portal (Streamlit)
-After=network-online.target k13-qdrant.service k13-embed.service k13-llama.service
-Wants=network-online.target k13-qdrant.service k13-embed.service k13-llama.service
+After=network-online.target k13-qdrant.service k13-openvino.service
+Wants=network-online.target k13-qdrant.service k13-openvino.service
 
 [Service]
 Type=simple
