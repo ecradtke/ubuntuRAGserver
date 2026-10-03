@@ -17,14 +17,14 @@ External: FreshRSS API and PostgreSQL (`fetch42`, `freshrss`) on the NAS; backup
 
 ## Layout
 `embed/` OpenVINO embedding server - `web/` portal - `rss/` sync - `systemd/` unit templates (`@USER@`, `@REPO@`) -
-`scripts/` installer, control, model, backup scripts - `docs/` guides. Config is a single `.env` read by systemd
-(`EnvironmentFile`) and by `scripts/_lib.sh` (parsed, never sourced).
+`scripts/` installer, control, model, backup scripts - `docs/` guides. Config is a single `.env` parsed (never sourced) by `scripts/_lib.sh`;
+the `scripts/run-*.sh` wrappers that systemd launches read it, so a service restart picks up edits.
 
 ## Rules for agents
 1. **Chat LLM = llama.cpp, embeddings = OpenVINO.** Do not reintroduce OpenVINO LLM pipelines or the Ollama API for chat.
 2. **Embedding dimension must match the Qdrant collection** (384 for `bge-small-en-v1.5`, 768 for `bge-base-en-v1.5`).
 3. **Model switching**: the portal calls `sudo -n /usr/local/sbin/k13-llm-switch FILE.gguf` (root-owned, baked paths,
    strictly validated name, sudoers rule for that single script). Keep it that way; never give the web user broader sudo.
-4. **Never put secrets in git.** Credentials live only in `.env`. `.env` values must work in systemd: comments on their own line, no inline `# ...`.
+4. **Never put secrets in git.** Credentials live only in `.env`. `.env`: comments on their own line, no inline `# ...`; quote values with spaces.
 5. systemd units are templates in `systemd/`; `scripts/install.sh --units-only` renders them. Services start via `scripts/run-*.sh`.
 6. Qdrant URL/hosts: the web portal reads `QDRANT_URL`, the sync reads `QDRANT_HOST`/`QDRANT_PORT` (derived in `run-rss-sync.sh`).
