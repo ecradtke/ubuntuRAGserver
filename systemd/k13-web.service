@@ -7,7 +7,7 @@ Wants=network-online.target k13-qdrant.service k13-openvino.service
 Type=simple
 User=@USER@
 WorkingDirectory=@REPO@/web
-ExecStart=@REPO@/scripts/run-web.sh
+ExecStart=/bin/bash @REPO@/scripts/run-web.sh
 Restart=on-failure
 RestartSec=5
 

@@ -23,6 +23,7 @@ done
 [[ $EUID -ne 0 ]] || die "Run this as your normal user, not root (it calls sudo when needed)."
 command -v sudo >/dev/null || die "sudo is required."
 USER_NAME="$(id -un)"
+chmod +x "$BASE_DIR"/scripts/*.sh 2>/dev/null || true     # git on some systems drops the executable bit
 [[ "$BASE_DIR" != *" "* ]] || die "The project path must not contain spaces: $BASE_DIR"
 
 # ---- 1. .env ------------------------------------------------------------------
