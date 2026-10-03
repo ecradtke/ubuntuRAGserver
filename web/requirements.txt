@@ -1,0 +1,7 @@
+streamlit>=1.47
+qdrant-client
+requests
+python-dotenv
+tzdata
+psycopg2-binary
+beautifulsoup4

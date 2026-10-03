@@ -1,0 +1,25 @@
+# Secrets & environment
+.env
+.env.*
+!.env.example
+*.local
+*.key
+*.pem
+
+# Python
+.venv/
+.venv-openvino/
+venv/
+__pycache__/
+*.py[cod]
+
+# Runtime data, logs, models
+logs/
+data/
+*.gguf
+*.log
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store

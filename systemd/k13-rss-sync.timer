@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the K13 RSS sync every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Unit=k13-rss-sync.service
+
+[Install]
+WantedBy=timers.target

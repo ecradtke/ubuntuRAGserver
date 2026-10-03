@@ -1,0 +1,12 @@
+# OpenVINO embedding server. If pip has no wheels for your Python version, set OPENVINO_PYTHON in
+# .env to the interpreter where OpenVINO is already installed (it needs these packages too).
+openvino
+optimum-intel[openvino]
+transformers
+numpy
+fastapi
+uvicorn[standard]
+pydantic
+huggingface-hub
+sentencepiece
+torch

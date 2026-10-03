@@ -1,0 +1,15 @@
+[Unit]
+Description=K13 web portal (Streamlit)
+After=network-online.target k13-qdrant.service k13-embed.service k13-llama.service
+Wants=network-online.target k13-qdrant.service k13-embed.service k13-llama.service
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@/web
+ExecStart=@REPO@/scripts/run-web.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

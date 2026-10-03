@@ -1,0 +1,12 @@
+[Unit]
+Description=K13 FreshRSS -> Postgres -> Qdrant sync (one run)
+After=network-online.target k13-qdrant.service k13-embed.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@REPO@/rss
+ExecStart=@REPO@/scripts/run-rss-sync.sh
+# the first run can drain a large backlog
+TimeoutStartSec=infinity
