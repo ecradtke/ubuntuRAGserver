@@ -2,21 +2,23 @@
 # ==============================================================================
 # K13 AI Stack - installer for Ubuntu Server (native services, no containers)
 #
-# Usage: ./scripts/install.sh [--units-only] [--upgrade-qdrant] [--skip-qdrant] [--keep-embed-model]
+# Usage: ./scripts/install.sh [--units-only] [--upgrade-qdrant] [--skip-qdrant] [--keep-embed-model] [--with-share] [--with-backups]
 #   (no flags)        full install: packages, folders, Python envs, Qdrant, systemd units, start services
 #   --units-only      only (re)install the systemd units
 #   --upgrade-qdrant  download the latest Qdrant even if one is installed
 #   --skip-qdrant     do not install Qdrant (you provide your own on port 6333)
+#   --with-share      also create the dropit folder and share it on the network (Samba; asks for a share password)
+#   --with-backups    also schedule the nightly backups (cron, 04:00 project+Qdrant, 04:15 PostgreSQL)
 #   --keep-embed-model  do not reset EMBED_MODEL in .env to BGE Base (BAAI/bge-base-en-v1.5)
 # Safe to run repeatedly. Run as your normal user; it uses sudo where needed.
 # ==============================================================================
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
-UNITS_ONLY=false; UPGRADE_QDRANT=false; SKIP_QDRANT=false; KEEP_EMBED=false
+UNITS_ONLY=false; UPGRADE_QDRANT=false; SKIP_QDRANT=false; KEEP_EMBED=false; WITH_SHARE=false; WITH_BACKUPS=false
 for a in "$@"; do
   case "$a" in
-    --units-only) UNITS_ONLY=true ;; --upgrade-qdrant) UPGRADE_QDRANT=true ;; --skip-qdrant) SKIP_QDRANT=true ;; --keep-embed-model) KEEP_EMBED=true ;;
+    --units-only) UNITS_ONLY=true ;; --upgrade-qdrant) UPGRADE_QDRANT=true ;; --skip-qdrant) SKIP_QDRANT=true ;; --keep-embed-model) KEEP_EMBED=true ;; --with-share) WITH_SHARE=true ;; --with-backups) WITH_BACKUPS=true ;;
     -h|--help) sed -n 2,11p "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown option: $a" ;;
   esac
@@ -165,10 +167,13 @@ for i in $(seq 1 30); do
   [[ "$q" == up && "$o" == up ]] && break
   echo "    qdrant: $q  openvino: $o  ($i/30)"; sleep 4
 done
+if $WITH_SHARE; then "$BASE_DIR/scripts/setup-share.sh" || warn "Share setup failed; run ./scripts/setup-share.sh again after fixing the error above."; fi
+if $WITH_BACKUPS; then "$BASE_DIR/scripts/install-cron.sh" || warn "Backup scheduling failed; run ./scripts/install-cron.sh again."; fi
 echo
 ok "Install finished. Next steps:"
 echo "  - Status:        ./scripts/k13ctl.sh status"
 echo "  - Watch models:  ./scripts/k13ctl.sh logs openvino   (first start downloads the LLM and embedding model)"
 echo "  - Web portal:    http://$(hostname -I | awk '{print $1}'):$(env_get WEB_PORT 8501)"
-echo "  - Backups:       ./scripts/install-cron.sh"
+$WITH_SHARE   || echo "  - Network share: ./scripts/setup-share.sh      (shares the backup folder over SMB)"
+$WITH_BACKUPS || echo "  - Backups:       ./scripts/install-cron.sh     (nightly 04:00 / 04:15)"
 echo "  (Log out and back in once so your shell picks up the render/video groups.)"

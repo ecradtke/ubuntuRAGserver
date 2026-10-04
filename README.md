@@ -27,7 +27,7 @@ nano .env
 ./scripts/install.sh
 ./scripts/k13ctl.sh logs openvino     # first start downloads and compiles the models
 ./scripts/k13ctl.sh status
-./scripts/install-cron.sh             # nightly backups at 04:00 / 04:15
+./scripts/install.sh --with-share --with-backups   # optional: network share + nightly backups (04:00 / 04:15)
 ```
 
 Full guide (prerequisites, GPU/NPU notes, models, troubleshooting): [docs/install_ubuntu.md](docs/install_ubuntu.md).
@@ -40,6 +40,7 @@ Full guide (prerequisites, GPU/NPU notes, models, troubleshooting): [docs/instal
 | `update.sh` | `git pull`, refresh packages and units, restart services |
 | `k13ctl.sh` | `status`, `start/stop/restart <svc>`, `logs <svc>`, `test` |
 | `backup_k13.sh`, `backup_postgres.sh`, `install-cron.sh` | Project + Qdrant and PostgreSQL backups to `DROPIT_DIR`, scheduled by cron |
+| `setup-share.sh` | Creates the `dropit` folder and shares it over SMB (Samba) to your LAN |
 | `uninstall.sh` | Remove the services (data kept) |
 | `run-*.sh`, `_lib.sh` | What systemd actually launches; read settings from `.env` |
 

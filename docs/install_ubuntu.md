@@ -64,13 +64,24 @@ The first start of `k13-openvino` downloads the LLM (about 5.5 GB for Qwen3-8B) 
   ```
 - The RSS sync first runs 2 minutes after boot, then every 5 minutes: `./scripts/k13ctl.sh logs rss`.
 
-## 4. Backups
+## 4. Backups and the network share
+`install.sh` installs the backup scripts but does **not** schedule them or create a share unless you ask. One command does both:
 ```bash
-./scripts/backup_k13.sh --keep 14          # project + Qdrant snapshot
-./scripts/backup_postgres.sh --keep 14     # fetch42 + freshrss databases
+./scripts/install.sh --with-share --with-backups
+```
+Or step by step:
+```bash
+./scripts/setup-share.sh                   # creates /srv/dropit and shares it over SMB (asks for a share password once)
+./scripts/backup_k13.sh --keep 14          # test: project + Qdrant snapshot -> DROPIT_DIR
+./scripts/backup_postgres.sh --keep 14     # test: fetch42 + freshrss databases
 ./scripts/install-cron.sh                  # daily 04:00 and 04:15; --time / --keep / --remove
 ```
-Downloaded models and the vector data folder are not in the project backup (models re-download; Qdrant is covered by its snapshot).
+- **The share:** only your user can sign in, only from your own LAN (auto-detected; override with `--subnet 192.168.4.0/24`), SMB2+ only, no guests.
+  Open `\\<server-ip>\dropit` on Windows or `smb://<server-ip>/dropit` on a Mac. The password is separate from your Linux login: `sudo smbpasswd e` changes it.
+  Remove the share any time with `./scripts/setup-share.sh --remove` (files are kept).
+- **If `/srv/dropit` is a mounted NAS share** the script stops: unmount it and remove its `/etc/fstab` line first.
+- **Backups live on this server's disk**, so also copy them elsewhere now and then.
+- Downloaded models and the vector data folder are not in the project backup (models re-download; Qdrant is covered by its snapshot).
 
 ## 5. Everyday commands
 | Task | Command |
