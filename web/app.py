@@ -510,6 +510,9 @@ CURATED_OV_MODELS = {
     "OpenVINO/Qwen3-4B-int4-ov":               "Qwen3 4B  •  4B  •  ~2.8 GB  (coding + reasoning)",
     "OpenVINO/Llama-3.2-3B-Instruct-int4-ov": "Llama 3.2 3B  •  3B  •  ~2.0 GB  (Meta reliable)",
     "OpenVINO/gemma-3-4B-it-int4-ov":          "Gemma 3 4B  •  4B  •  ~2.5 GB  (Google reasoning)",
+    "OpenVINO/Qwen2.5-7B-Instruct-int4-ov":    "Qwen2.5 7B Instruct ⭐  •  7B  •  ~4.3 GB  (news summaries, small KV cache = long context)",
+    "OpenVINO/Mistral-7B-Instruct-v0.3-int4-ov": "Mistral 7B v0.3  •  7B  •  ~4.2 GB  (clean, concise writing, 32k ctx)",
+    "OpenVINO/Llama-3.1-8B-Instruct-int4-ov":  "Llama 3.1 8B Instruct  •  8B  •  ~4.8 GB  (128k ctx)",
     "OpenVINO/Qwen3-8B-int4-ov":               "Qwen3 8B 🔥  •  8B  •  ~5.5 GB  (best quality, needs 6GB+)",
     # 12-14B class: needs a lot of GPU-accessible memory. If a model does not fit on the GPU the switch is
     # rolled back and the previous model stays loaded. Repo names are the usual OpenVINO Hub names; if one
