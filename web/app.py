@@ -1143,7 +1143,7 @@ if active_query:
         _gen_s = max(_t_end - _gen_t0, 1e-9)
         _out = _final_chunk.get("eval_count")
         _in = _final_chunk.get("prompt_eval_count")
-        _exact = bool(_out) and bool(_final_chunk.get("metrics_exact"))
+        _exact = bool(_out)
         if not _out:
             _out = int(len(raw_response) / CHARS_PER_TOKEN)
         if not _in:
@@ -1156,7 +1156,7 @@ if active_query:
             "gen": {
                 "tps": _out / _decode_s,
                 "out_tokens": _out, "in_tokens": _in, "ttft_s": _ttft,
-                "exact": _exact, "device": _final_chunk.get("device"),
+                "exact": _exact, "device": _final_chunk.get("device") or llm_hw,
                 "stop": _final_chunk.get("done_reason", "?"),
                 "thinking_chars": _thinking_chars,
             },
