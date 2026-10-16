@@ -9,6 +9,7 @@ export QDRANT_URL="$(env_get QDRANT_URL "http://127.0.0.1:${QDRANT_PORT}")"
 export OLLAMA_HOST="$(env_get OPENVINO_URL "http://127.0.0.1:${OV_PORT}")"
 export QDRANT_COLLECTION="$(env_get QDRANT_COLLECTION rss_articles)"
 export DEFAULT_MODEL="$(env_get DEFAULT_MODEL OpenVINO/Qwen3-8B-int4-ov)"
+export TOP_K_MAX="$(env_get TOP_K_MAX 100)" RAG_CONTEXT_TOKEN_BUDGET="$(env_get RAG_CONTEXT_TOKEN_BUDGET 8000)"
 cd "$BASE_DIR/web"
 exec "$PY" -m streamlit run app.py --server.port "$(env_get WEB_PORT 8501)" --server.address "$(env_get WEB_HOST 0.0.0.0)" \
      --server.headless true --browser.gatherUsageStats false

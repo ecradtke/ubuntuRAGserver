@@ -213,6 +213,71 @@ st.markdown("""
 DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")   # OpenVINO server (LLM + embeddings)
 DEFAULT_QDRANT_HOST = os.getenv("QDRANT_URL", "http://127.0.0.1:6333")
 DEFAULT_COLLECTION = os.getenv("QDRANT_COLLECTION", "rss_articles")
+# Retrieval limits. The context sent to the LLM is capped to a token budget so a large Top K cannot exhaust
+# GPU memory (the KV cache grows with the prompt). Raise RAG_CONTEXT_TOKEN_BUDGET only after testing.
+TOP_K_MAX = int(os.getenv("TOP_K_MAX", "100"))
+RAG_CONTEXT_TOKEN_BUDGET = int(os.getenv("RAG_CONTEXT_TOKEN_BUDGET", "8000"))
+EXCERPT_MAX_CHARS = 300
+CHARS_PER_TOKEN = 3.5      # conservative for English text with URLs
+TOKENS_PER_EXCERPT = 145   # typical: source header + 300-char excerpt + separator
+
+# ==============================================================================
+# RAG context helpers (module level so they can be unit-tested)
+# ==============================================================================
+def clean_url(raw_url: str) -> str:
+    """Extract the real URL from a Google redirect wrapper, or return as-is."""
+    if not raw_url or raw_url == "N/A":
+        return raw_url
+    if "google.com/url" in raw_url:
+        from urllib.parse import urlparse, parse_qs
+        try:
+            params = parse_qs(urlparse(raw_url).query)
+            if "url" in params:
+                return params["url"][0]
+        except Exception:
+            pass
+    return raw_url
+
+
+def trim_excerpt(text: str, limit: int = EXCERPT_MAX_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    trimmed = text[:limit]
+    last_period = trimmed.rfind(". ")
+    if last_period > limit * 0.6:
+        return trimmed[:last_period + 1]
+    return trimmed.rstrip() + "…"
+
+
+def build_context(docs, metas, budget_tokens: int = RAG_CONTEXT_TOKEN_BUDGET):
+    """Join the retrieved excerpts into one context string that fits the token budget.
+
+    Order is similarity order, so if there are too many excerpts we first shorten each one
+    (down to ~100 chars) and only then drop the least relevant ones from the end.
+    Returns (context_text, excerpts_used, chars_per_excerpt, was_trimmed).
+    """
+    budget_chars = int(budget_tokens * CHARS_PER_TOKEN)
+    sep = "\n\n---\n\n"
+    heads = [
+        f"Source [{m.get('title', f'Doc {i+1}')} - {m.get('feed', '')}]"
+        f" (URL: {clean_url(m.get('url', 'N/A'))}): "
+        for i, m in enumerate(metas)
+    ]
+
+    def render(count, limit):
+        return sep.join(heads[i] + trim_excerpt(docs[i], limit) for i in range(count))
+
+    n = len(docs)
+    for limit in (EXCERPT_MAX_CHARS, 240, 190, 150, 120, 100):
+        text = render(n, limit)
+        if len(text) <= budget_chars:
+            return text, n, limit, limit < EXCERPT_MAX_CHARS
+    # still too long at the minimum excerpt size: keep the most relevant ones that fit
+    count = n
+    while count > 1 and len(render(count, 100)) > budget_chars:
+        count -= 1
+    return render(count, 100), count, 100, True
+
 DEFAULT_LLM_MODEL = os.getenv("DEFAULT_MODEL", "OpenVINO/Phi-3.5-mini-instruct-int4-ov")
 
 # ==============================================================================
@@ -365,11 +430,19 @@ st.sidebar.markdown("### 🧠 Intelligence & Search")
 top_k = st.sidebar.slider(
     "Excerpts to Retrieve (Top K)",
     min_value=1,
-    max_value=50,
-    value=6,
+    max_value=TOP_K_MAX,
+    value=min(6, TOP_K_MAX),
     step=1,
-    help="Number of vector-matched article excerpts fed to the LLM as RAG context. Higher values give broader coverage but increase prompt size. Context is automatically trimmed to fit the model's window. Recommended: 5–15 for focused answers, 20–50 for broad research sweeps."
+    help=("Number of vector-matched article excerpts fed to the LLM as RAG context. Higher values give broader coverage "
+          "but a longer prompt (slower first word, more GPU memory). The context is capped at "
+          f"{RAG_CONTEXT_TOKEN_BUDGET:,} tokens: beyond that, excerpts are shortened and then the least relevant are dropped. "
+          "Recommended: 5-15 for focused answers, 20-50 for broad research sweeps.")
 )
+_est_tokens = top_k * TOKENS_PER_EXCERPT
+if _est_tokens > RAG_CONTEXT_TOKEN_BUDGET:
+    st.sidebar.caption(f"⚠️ ≈{_est_tokens:,} tokens needed; excerpts will be shortened to fit the {RAG_CONTEXT_TOKEN_BUDGET:,}-token budget.")
+else:
+    st.sidebar.caption(f"≈{_est_tokens:,} tokens of context at this setting (budget {RAG_CONTEXT_TOKEN_BUDGET:,}).")
 
 # ==============================================================================
 # Sidebar: Live LLM Model Switcher
@@ -942,43 +1015,12 @@ if active_query:
                 "that the database lacks sufficient reporting on the topic. Reference source titles and include their URLs as Markdown links where applicable."
             )
 
-        # Construct augmented user prompt.
-        # Strategy: trim each excerpt AND clean each URL individually so the total
-        # context stays within Phi-3.5-mini's 4K token window at any Top K value.
-        # Google redirect URLs (google.com/url?...&url=<target>&...) are stripped to
-        # just the inner target URL — they were contributing ~300 chars each.
-        EXCERPT_MAX_CHARS = 300
-
-        def clean_url(raw_url: str) -> str:
-            """Extract the real URL from a Google redirect wrapper, or return as-is."""
-            if not raw_url or raw_url == "N/A":
-                return raw_url
-            if "google.com/url" in raw_url:
-                from urllib.parse import urlparse, parse_qs
-                try:
-                    params = parse_qs(urlparse(raw_url).query)
-                    if "url" in params:
-                        return params["url"][0]
-                except Exception:
-                    pass
-            return raw_url
-
-        def trim_excerpt(text: str, limit: int = EXCERPT_MAX_CHARS) -> str:
-            if len(text) <= limit:
-                return text
-            trimmed = text[:limit]
-            last_period = trimmed.rfind(". ")
-            if last_period > limit * 0.6:
-                return trimmed[:last_period + 1]
-            return trimmed.rstrip() + "…"
-
+        # Construct the augmented user prompt (context is capped to RAG_CONTEXT_TOKEN_BUDGET, see build_context).
         if retrieved_docs:
-            context_parts = [
-                f"Source [{meta.get('title', f'Doc {i+1}')} - {meta.get('feed', '')}]"
-                f" (URL: {clean_url(meta.get('url', 'N/A'))}): {trim_excerpt(doc)}"
-                for i, (doc, meta) in enumerate(zip(retrieved_docs, retrieved_meta))
-            ]
-            context_str = "\n\n---\n\n".join(context_parts)
+            context_str, _used_k, _used_lim, _trimmed = build_context(retrieved_docs, retrieved_meta)
+            if _trimmed:
+                st.caption(f"ℹ️ Context trimmed to fit the ~{RAG_CONTEXT_TOKEN_BUDGET:,}-token budget: "
+                           f"{_used_k} of {len(retrieved_docs)} excerpts, up to {_used_lim} characters each.")
             augmented_user_prompt = f"Context:\n{context_str}\n\nQuestion: {active_query}"
         else:
             augmented_user_prompt = active_query
