@@ -890,11 +890,11 @@ if active_query:
             # URL Lookup in Qdrant
             if db_engine.startswith("Qdrant") and qdrant_connected and q_client is not None and detected_urls:
                 for target_url in detected_urls:
-                    clean_url = target_url.rstrip('/.,);')
+                    exact_url = target_url.rstrip('/.,);')
                     try:
                         pts, _ = q_client.scroll(
                             collection_name=selected_collection,
-                            scroll_filter=Filter(must=[FieldCondition(key="url", match=MatchValue(value=clean_url))]),
+                            scroll_filter=Filter(must=[FieldCondition(key="url", match=MatchValue(value=exact_url))]),
                             limit=3,
                             with_payload=True
                         )
@@ -906,7 +906,7 @@ if active_query:
                                 exact_meta.append({
                                     "title": p.get("title", "Exact Match"),
                                     "date": p.get("published_at", ""),
-                                    "url": p.get("url", clean_url),
+                                    "url": p.get("url", exact_url),
                                     "feed": p.get("feed", "Exact URL Match")
                                 })
                     except Exception:
