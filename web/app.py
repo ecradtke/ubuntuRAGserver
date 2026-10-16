@@ -278,6 +278,59 @@ def build_context(docs, metas, budget_tokens: int = RAG_CONTEXT_TOKEN_BUDGET):
         count -= 1
     return render(count, 100), count, 100, True
 
+
+def context_stats(docs, used, limit, budget_tokens: int = RAG_CONTEXT_TOKEN_BUDGET):
+    """How many excerpts were cut to fit: by the per-excerpt cap, by the token budget, or dropped."""
+    used_docs = docs[:used]
+    return {
+        "retrieved": len(docs),
+        "used": used,
+        "dropped": len(docs) - used,
+        "cut_to_cap": sum(1 for d in used_docs if len(d) > EXCERPT_MAX_CHARS),
+        "cut_for_budget": sum(1 for d in used_docs if len(d) > limit) if limit < EXCERPT_MAX_CHARS else 0,
+        "excerpt_chars": limit,
+        "budget_tokens": budget_tokens,
+    }
+
+
+def render_query_stats(st_stats):
+    """Per-question report: generation speed, token usage, retrieval and truncation."""
+    if not st_stats:
+        return
+    with st.expander("📊 Query statistics", expanded=False):
+        g = st_stats.get("gen", {})
+        r = st_stats.get("retrieval", {})
+        t = st_stats.get("timing", {})
+        est = "" if g.get("exact") else " (est.)"
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Tokens/s", f"{g.get('tps', 0):.1f}{est}")
+        c2.metric("Output tokens", f"{g.get('out_tokens', 0):,}")
+        c3.metric("Prompt tokens", f"{g.get('in_tokens', 0):,}")
+        c4.metric("Time to 1st token", f"{g.get('ttft_s', 0):.1f}s")
+        st.markdown(
+            f"- **Total time:** {t.get('total_s', 0):.1f}s "
+            f"(embed {t.get('embed_s', 0):.2f}s · search {t.get('search_s', 0):.2f}s · generate {t.get('gen_s', 0):.1f}s)\n"
+            f"- **Model:** `{st_stats.get('model', '?')}` on **{g.get('device') or '?'}**\n"
+            f"- **Stop reason:** {g.get('stop', '?')}"
+            + (" ⚠️ hit the max-new-tokens limit, answer may be cut off" if g.get("stop") == "length" else "")
+            + f"\n- **Hidden reasoning stripped:** {g.get('thinking_chars', 0):,} chars"
+        )
+        if r and not r.get("retrieved"):
+            st.markdown(f"**Retrieval:** no excerpts retrieved (Top K {r.get('top_k', '?')}).")
+        elif r:
+            st.markdown(
+                "**Retrieval & truncation**\n\n"
+                "| Item | Count |\n|---|---|\n"
+                f"| Top K requested | {r.get('top_k', '?')} |\n"
+                f"| Excerpts retrieved | {r.get('retrieved', 0)} |\n"
+                f"| Excerpts sent to the model | {r.get('used', 0)} |\n"
+                f"| Dropped (over token budget) | {r.get('dropped', 0)} |\n"
+                f"| Cut at {EXCERPT_MAX_CHARS}-char excerpt cap | {r.get('cut_to_cap', 0)} |\n"
+                f"| Shortened further for budget | {r.get('cut_for_budget', 0)} |\n"
+                f"| Final chars per excerpt | {r.get('excerpt_chars', '?')} |\n"
+                f"| Context budget | ~{r.get('budget_tokens', 0):,} tokens |"
+            )
+
 DEFAULT_LLM_MODEL = os.getenv("DEFAULT_MODEL", "OpenVINO/Phi-3.5-mini-instruct-int4-ov")
 
 # ==============================================================================
@@ -812,6 +865,7 @@ for msg in st.session_state.messages:
                     st.caption(s.get("text", ""))
                     st.divider()
         st.markdown(msg["content"])
+        render_query_stats(msg.get("stats"))
 
 # Process input
 user_input = st.chat_input("Ask about breaking events, summaries, or specific topics...")
@@ -862,12 +916,14 @@ if active_query:
             embed_input = search_keywords if search_keywords.strip() else active_query
 
             # Generate embedding via Ollama
+            _t_embed0 = time.perf_counter()
             try:
                 emb_resp = ollama_client.embed(model=_current_embed_model, input=embed_input)
                 query_vector = emb_resp["embeddings"][0]
             except AttributeError:
                 emb_resp = ollama_client.embeddings(model=_current_embed_model, prompt=embed_input)
                 query_vector = emb_resp["embedding"]
+            _t_embed1 = time.perf_counter()
 
             if db_engine.startswith("Qdrant") and qdrant_connected and q_client is not None:
                 # Build Qdrant Filter
@@ -1018,6 +1074,7 @@ if active_query:
         # Construct the augmented user prompt (context is capped to RAG_CONTEXT_TOKEN_BUDGET, see build_context).
         if retrieved_docs:
             context_str, _used_k, _used_lim, _trimmed = build_context(retrieved_docs, retrieved_meta)
+            _ctx_stats = context_stats(retrieved_docs, _used_k, _used_lim)
             if _trimmed:
                 st.caption(f"ℹ️ Context trimmed to fit the ~{RAG_CONTEXT_TOKEN_BUDGET:,}-token budget: "
                            f"{_used_k} of {len(retrieved_docs)} excerpts, up to {_used_lim} characters each.")
@@ -1025,6 +1082,10 @@ if active_query:
         else:
             augmented_user_prompt = active_query
 
+        _t_search_end = time.perf_counter()
+        _ctx_stats = locals().get('_ctx_stats') or {}
+        _final_chunk = {}
+        _t_first = None
         # Stream response from Ollama (without importing pandas)
         message_placeholder = st.empty()
         full_response = ""
@@ -1040,7 +1101,12 @@ if active_query:
                 stream=True
             )
 
+            _t_gen0 = time.perf_counter()
             for chunk in stream:
+                if _t_first is None and chunk["message"]["content"]:
+                    _t_first = time.perf_counter()
+                if chunk.get("done"):
+                    _final_chunk = dict(chunk) if not hasattr(chunk, "model_dump") else chunk.model_dump()
                 raw_response += chunk["message"]["content"]
                 full_response, thinking = strip_thinking(raw_response, streaming=True)
                 if full_response:
@@ -1072,8 +1138,48 @@ if active_query:
             }
             for i, (doc, meta) in enumerate(zip(retrieved_docs, retrieved_meta))
         ]
+        _t_end = time.perf_counter()
+        _gen_t0 = locals().get('_t_gen0', _t_search_end)
+        _gen_s = max(_t_end - _gen_t0, 1e-9)
+        _out = _final_chunk.get("eval_count")
+        _in = _final_chunk.get("prompt_eval_count")
+        _exact = bool(_out) and bool(_final_chunk.get("metrics_exact"))
+        if not _out:
+            _out = int(len(raw_response) / CHARS_PER_TOKEN)
+        if not _in:
+            _in = int((len(system_prompt) + len(augmented_user_prompt)) / CHARS_PER_TOKEN)
+        _ttft = (_final_chunk.get("prompt_eval_duration") or 0) / 1e9 or ((_t_first - _gen_t0) if _t_first else _gen_s)
+        _decode_s = (_final_chunk.get("eval_duration") or 0) / 1e9 or max(_gen_s - _ttft, 1e-9)
+        _thinking_chars = max(len(raw_response) - len(full_response), 0)
+        query_stats = {
+            "model": _current_server_model,
+            "gen": {
+                "tps": _out / _decode_s,
+                "out_tokens": _out, "in_tokens": _in, "ttft_s": _ttft,
+                "exact": _exact, "device": _final_chunk.get("device"),
+                "stop": _final_chunk.get("done_reason", "?"),
+                "thinking_chars": _thinking_chars,
+            },
+            "retrieval": dict(_ctx_stats, top_k=top_k),
+            "timing": {
+                "embed_s": _t_embed1 - _t_embed0 if '_t_embed1' in locals() else 0,
+                "search_s": _t_search_end - _t_embed1 if '_t_embed1' in locals() else 0,
+                "gen_s": _gen_s, "total_s": _t_end - _t_embed0 if '_t_embed0' in locals() else _gen_s,
+            },
+        }
+        render_query_stats(query_stats)
+        try:
+            _log = os.getenv("QUERY_STATS_LOG", "").strip()
+            if _log:
+                import json as _json
+                os.makedirs(os.path.dirname(_log) or ".", exist_ok=True)
+                with open(_log, "a", encoding="utf-8") as _f:
+                    _f.write(_json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "query": active_query, **query_stats}) + "\n")
+        except Exception:
+            pass
         st.session_state.messages.append({
             "role": "assistant",
             "content": full_response,
-            "sources": sources_to_save
+            "sources": sources_to_save,
+            "stats": query_stats
         })

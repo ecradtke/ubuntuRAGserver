@@ -436,6 +436,44 @@ def locked_generate(prompt, gen_config, streamer=None):
         return llm_pipeline.generate(prompt, gen_config, streamer)
 
 
+def build_gen_stats(result, prompt, out_text, t0, t_first, t_end):
+    """Ollama-style token/timing stats. Prefers OpenVINO perf_metrics, falls back
+    to tokenizer counts and wall-clock time. Durations are in nanoseconds."""
+    total_s = max(t_end - t0, 1e-9)
+    ttft_s = (t_first - t0) if t_first else total_s
+    n_in = n_out = None
+    exact = False
+    try:
+        pm = getattr(result, "perf_metrics", None)
+        if pm is not None:
+            n_in = int(pm.get_num_input_tokens())
+            n_out = int(pm.get_num_generated_tokens())
+            ttft_ms = float(pm.get_ttft().mean)
+            if ttft_ms > 0:
+                ttft_s = ttft_ms / 1000.0
+            exact = True
+    except Exception:
+        n_in = n_out = None
+    if n_in is None or n_out is None:
+        try:
+            n_in = len(llm_tokenizer(prompt)["input_ids"])
+            n_out = len(llm_tokenizer(out_text, add_special_tokens=False)["input_ids"])
+        except Exception:
+            n_in = int(len(prompt) / 3.5)
+            n_out = int(len(out_text) / 3.5)
+    eval_s = max(total_s - ttft_s, 1e-9)
+    return {
+        "prompt_eval_count": n_in,
+        "eval_count": n_out,
+        "prompt_eval_duration": int(ttft_s * 1e9),
+        "eval_duration": int(eval_s * 1e9),
+        "total_duration": int(total_s * 1e9),
+        "done_reason": "length" if n_out >= MAX_NEW_TOKENS else "stop",
+        "metrics_exact": exact,
+        "device": active_llm_device,
+    }
+
+
 def _compute_embedding(text: str) -> List[float]:
     global embed_model, embed_tokenizer, active_embed_device, embed_init_error
     if not embed_model or not embed_tokenizer:
@@ -821,12 +859,18 @@ async def ollama_chat(req: OllamaChatRequest):
     if req.stream:
         async def stream_generator():
             token_queue = queue.Queue()
+            first_t = [None]
+            out_parts = []
+            final_stats = {}
             
             def streamer(chunk: str) -> bool:
                 # Filter out null bytes and control-character artifacts that
                 # openvino_genai emits when the model hits its KV-cache limit
                 # or generates EOS/pad tokens. These decode as 0x00, \x01 etc.
                 if chunk and not any(ord(c) < 9 for c in chunk):
+                    if first_t[0] is None:
+                        first_t[0] = time.time()
+                    out_parts.append(chunk)
                     token_queue.put(chunk)
                 return False
 
@@ -835,7 +879,10 @@ async def ollama_chat(req: OllamaChatRequest):
                     import openvino_genai as ov_genai
                     gen_config = ov_genai.GenerationConfig()
                     gen_config.max_new_tokens = MAX_NEW_TOKENS
-                    locked_generate(formatted_prompt, gen_config, streamer)
+                    t0 = time.time()
+                    result = locked_generate(formatted_prompt, gen_config, streamer)
+                    t_end = time.time()
+                    token_queue.put({"__stats__": build_gen_stats(result, formatted_prompt, "".join(out_parts), t0, first_t[0], t_end)})
                 except Exception as ex:
                     logger.error(f"Inference error during stream: {ex}")
                 finally:
@@ -845,13 +892,17 @@ async def ollama_chat(req: OllamaChatRequest):
 
             while True:
                 token = await asyncio.to_thread(token_queue.get)
+                if isinstance(token, dict) and "__stats__" in token:
+                    final_stats = token["__stats__"]
+                    continue
                 if token is None:
                     # Final done message
                     yield json.dumps({
                         "model": req.model,
                         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         "message": {"role": "assistant", "content": ""},
-                        "done": True
+                        "done": True,
+                        **final_stats
                     }) + "\n"
                     break
                 
@@ -891,11 +942,17 @@ async def ollama_generate(req: OllamaGenerateRequest):
     if req.stream:
         async def stream_generator():
             token_queue = queue.Queue()
+            first_t = [None]
+            out_parts = []
+            final_stats = {}
             def streamer(chunk: str) -> bool:
                 # Filter out null bytes and control-character artifacts that
                 # openvino_genai emits when the model hits its KV-cache limit
                 # or generates EOS/pad tokens. These decode as 0x00, \x01 etc.
                 if chunk and not any(ord(c) < 9 for c in chunk):
+                    if first_t[0] is None:
+                        first_t[0] = time.time()
+                    out_parts.append(chunk)
                     token_queue.put(chunk)
                 return False
 
@@ -904,7 +961,10 @@ async def ollama_generate(req: OllamaGenerateRequest):
                     import openvino_genai as ov_genai
                     gen_config = ov_genai.GenerationConfig()
                     gen_config.max_new_tokens = MAX_NEW_TOKENS
-                    llm_pipeline.generate(prompt, gen_config, streamer)
+                    t0 = time.time()
+                    result = locked_generate(prompt, gen_config, streamer)
+                    t_end = time.time()
+                    token_queue.put({"__stats__": build_gen_stats(result, prompt, "".join(out_parts), t0, first_t[0], t_end)})
                 except Exception as ex:
                     logger.error(f"Inference error during stream: {ex}")
                 finally:
@@ -914,12 +974,16 @@ async def ollama_generate(req: OllamaGenerateRequest):
 
             while True:
                 token = await asyncio.to_thread(token_queue.get)
+                if isinstance(token, dict) and "__stats__" in token:
+                    final_stats = token["__stats__"]
+                    continue
                 if token is None:
                     yield json.dumps({
                         "model": req.model,
                         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         "response": "",
-                        "done": True
+                        "done": True,
+                        **final_stats
                     }) + "\n"
                     break
                 
