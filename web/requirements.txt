@@ -6,3 +6,4 @@ python-dotenv
 tzdata
 psycopg2-binary
 beautifulsoup4
+markdown

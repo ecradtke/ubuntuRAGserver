@@ -331,6 +331,47 @@ def render_query_stats(st_stats):
                 f"| Context budget | ~{r.get('budget_tokens', 0):,} tokens |"
             )
 
+
+def answer_to_html(question, answer, sources, stats):
+    """Self-contained HTML page (inline CSS, clickable source links) for one answer."""
+    import html as _h
+    try:
+        import markdown as _md
+        body = _md.markdown((answer or "").replace("<", "&lt;"), extensions=["extra", "sane_lists", "nl2br"])
+    except Exception:
+        body = "<pre style='white-space:pre-wrap'>" + _h.escape(answer or "") + "</pre>"
+    src_html = ""
+    if sources:
+        items = []
+        for sx in sources:
+            title = _h.escape(sx.get("title") or "Source")
+            url = sx.get("url") or ""
+            meta = " &middot; ".join(_h.escape(x) for x in (sx.get("feed", ""), str(sx.get("date", ""))) if x)
+            link = f'<a href="{_h.escape(url, quote=True)}" target="_blank" rel="noopener">{title}</a>' if url else title
+            items.append(f"<li>{link}" + (f' <span class="m">({meta})</span>' if meta else "") + "</li>")
+        src_html = "<h2>Sources</h2><ol>" + "".join(items) + "</ol>"
+    stat_html = ""
+    if stats:
+        g, r = stats.get("gen", {}), stats.get("retrieval", {})
+        stat_html = ("<p class='m'>Model: %s &middot; %s output tokens &middot; %.1f tokens/s &middot; %s of %s excerpts used</p>"
+                     % (_h.escape(str(stats.get("model", "?"))), f"{g.get('out_tokens', 0):,}", g.get("tps", 0),
+                        r.get("used", "?"), r.get("retrieved", "?")))
+    now = datetime.now().astimezone().strftime("%b %d, %Y %H:%M %Z")
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>{_h.escape((question or 'Report')[:80])}</title>
+<style>body{{font:16px/1.6 system-ui,sans-serif;max-width:820px;margin:2rem auto;padding:0 1rem;color:#1b1f24}}
+h1{{font-size:1.3rem}}h2{{font-size:1.1rem;margin-top:2rem}}.q{{background:#f1f3f5;padding:.8rem 1rem;border-radius:8px}}
+.m{{color:#667;font-size:.85rem}}a{{color:#0b5fff}}@media(prefers-color-scheme:dark){{body{{background:#14171a;color:#e6e8ea}}
+.q{{background:#22272b}}.m{{color:#9aa4ad}}a{{color:#6ea8ff}}}}</style></head><body>
+<h1>Intelligence Hub Report</h1><p class="m">Generated {now}</p>
+<div class="q"><b>Question:</b> {_h.escape(question or '')}</div>
+<h2>Answer</h2>{body}{src_html}{stat_html}</body></html>"""
+
+
+def html_download_button(question, answer, sources, stats, key):
+    st.download_button("💾 Save as HTML", data=answer_to_html(question, answer, sources, stats).encode("utf-8"),
+                       file_name=f"report_{datetime.now():%Y%m%d_%H%M}.html", mime="text/html", key=key)
+
 DEFAULT_LLM_MODEL = os.getenv("DEFAULT_MODEL", "OpenVINO/Phi-3.5-mini-instruct-int4-ov")
 
 # ==============================================================================
@@ -847,7 +888,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Display conversation history
-for msg in st.session_state.messages:
+for _i, msg in enumerate(st.session_state.messages):
     with st.chat_message(msg["role"]):
         if msg.get("sources"):
             with st.expander(f"🔍 Retrieved {len(msg['sources'])} Context Excerpts", expanded=False):
@@ -869,6 +910,9 @@ for msg in st.session_state.messages:
                     st.divider()
         st.markdown(msg["content"])
         render_query_stats(msg.get("stats"))
+        if msg["role"] == "assistant":
+            _q = msg.get("query") or next((m["content"] for m in reversed(st.session_state.messages[:_i]) if m["role"] == "user"), "")
+            html_download_button(_q, msg["content"], msg.get("sources"), msg.get("stats"), key=f"dl_hist_{_i}")
 
 # Process input
 user_input = st.chat_input("Ask about breaking events, summaries, or specific topics...")
@@ -1171,6 +1215,7 @@ if active_query:
             },
         }
         render_query_stats(query_stats)
+        html_download_button(active_query, full_response, sources_to_save, query_stats, key=f"dl_live_{len(st.session_state.messages)}")
         try:
             _log = os.getenv("QUERY_STATS_LOG", "").strip()
             if _log:
@@ -1184,5 +1229,6 @@ if active_query:
             "role": "assistant",
             "content": full_response,
             "sources": sources_to_save,
+            "query": active_query,
             "stats": query_stats
         })
